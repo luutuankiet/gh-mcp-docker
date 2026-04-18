@@ -1,0 +1,20 @@
+# gh-mcp — a `gh` CLI exec surface driven by tumf/mcp-shell-server.
+#
+# Topology: mcpproxy (smart-mcp-proxy/mcpproxy-go) is configured with
+#   command: docker
+#   args:    ["exec", "-i", "gh-mcp", "mcp-shell-server"]
+# So the container itself just stays alive — the proxy spawns mcp-shell-server
+# per-session via `docker exec`. container_name must stay `gh-mcp`.
+services:
+  gh-mcp:
+    build:
+      context: .
+    image: gh-mcp:latest
+    container_name: gh-mcp
+    working_dir: /workspace
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ALLOW_COMMANDS: "gh,git,ls,cat,echo,pwd,which,head,tail,wc,grep,find"
+    command: ["tail", "-f", "/dev/null"]

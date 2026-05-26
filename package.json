@@ -1,0 +1,22 @@
+{
+  "name": "gh-cli-mcp-http",
+  "version": "0.2.0",
+  "description": "Self-hosted read-only MCP server for live GitHub codebase exploration. Bundles git + gh + ripgrep + jq + yq; serves over HTTP via @modelcontextprotocol/sdk's StreamableHTTPServerTransport. Replaces gh-mcp-docker.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "dotenv": "^17.0.0",
+    "express": "^4.21.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

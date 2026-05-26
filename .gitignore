@@ -1,0 +1,5 @@
+gsd-lite/
+node_modules/
+dist/
+.env
+*.log

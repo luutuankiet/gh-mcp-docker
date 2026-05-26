@@ -18,12 +18,19 @@ export const grepSchema = {
   files_only: z.boolean().optional(),
   max_depth: z.number().int().positive().max(20).optional(),
   max_matches: z.number().int().positive().max(500).optional(),
+  no_ignore: z.boolean().optional().describe('default false; when true, pass --no-ignore --hidden to ripgrep AND drop the default exclude glob (raw rg semantics, scans node_modules / dist / .git / etc.)'),
+  hidden: z.boolean().optional().describe('default false; when true, include dot-prefixed files (--hidden) while keeping .gitignore respect and the default exclude glob'),
 };
 
 // Default section boundary regex — next func/class/def/interface/type/const/let/var/export/markdown-header.
 // Match-anchored at start of line. Multi-language good-enough heuristic.
 const SECTION_BOUNDARY = /^(?:(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|const|let|var|enum|struct|impl|trait|fn|def|public|private|protected|static)\b|#{1,4}\s)/;
 const MAX_SECTION_LOOKAHEAD = 100;
+
+// Belt-and-braces default exclude glob — layered ON TOP of ripgrep's .gitignore
+// respect, so repos that committed noise (vendored deps, generated dirs) still
+// stay quiet. Dropped entirely when no_ignore=true.
+const DEFAULT_EXCLUDE_GLOB = '!**/{node_modules,vendor,dist,build,target,.venv,venv,__pycache__,.next,.nuxt,.svelte-kit,.turbo,.yarn,.pnpm-store,_build,bin,obj,coverage,Pods,DerivedData,.dart_tool,.pub-cache,.terraform,.cache,.ruff_cache,.tox,.gradle,.pytest_cache,.mypy_cache,.git,.idea,.vscode}/**';
 
 async function findSectionEnd(absPath: string, startLine: number): Promise<number> {
   try {
@@ -50,6 +57,18 @@ export function makeGrepHandler(manager: CloneManager) {
       const { workspace, absPath } = manager.resolvePath(input.workspace_id, input.path || '.');
       const args = ['--json', '--max-depth', String(input.max_depth ?? 8)];
       if (input.ignore_case) args.push('-i');
+
+      // Noise reduction layering:
+      //   no_ignore=true → raw rg: --no-ignore --hidden, no fallback glob
+      //   hidden=true    → keep gitignore + fallback glob, include hidden files
+      //   default        → gitignore respected + fallback glob applied
+      if (input.no_ignore === true) {
+        args.push('--no-ignore', '--hidden');
+      } else {
+        if (input.hidden === true) args.push('--hidden');
+        args.push('--glob', DEFAULT_EXCLUDE_GLOB);
+      }
+
       if (input.glob) args.push('--glob', input.glob);
       if (input.files_only) args.push('-l');
       if (input.context && input.context > 0) args.push('-C', String(input.context));

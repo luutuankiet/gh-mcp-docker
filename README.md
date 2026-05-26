@@ -43,6 +43,14 @@ claude mcp add --transport http gh-cli https://<user>:<password>@<your-host>/mcp
 
 No edit. No bash. No `run_command` escape hatch. No language toolchains in the image. By design.
 
+### Default ignore behavior
+
+Both `directory_tree` and `grep` skip the typical noisy dirs (`node_modules`, `.git`, `dist`, `build`, `target`, `.venv`, `__pycache__`, `vendor`, `.next`, `.nuxt`, `.turbo`, `coverage`, `Pods`, `DerivedData`, lockfile caches, editor metadata, etc.) by default — the common case is a clean codebase walk, not a bytecode tour. Opt back in when you need it:
+
+- `directory_tree`: set `include_ignored: true` to walk everything, or pass `extra_skip: ["foo", "bar"]` to append more names. The response echoes a `skipped_dirs` list of names actually encountered, so an agent can discover what it missed and re-call.
+- `grep`: set `no_ignore: true` for raw `rg --no-ignore --hidden` semantics (also drops the default exclude glob); or `hidden: true` to include dot-prefixed files while keeping `.gitignore` respect and the default exclude glob. The default behavior also honors the workspace's `.gitignore`.
+- Skip set applies on **recursion**, not on the entry path. If you explicitly target `path: node_modules/lodash`, the walk descends from there.
+
 ## Config
 
 | env | default | purpose |

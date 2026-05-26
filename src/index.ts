@@ -47,7 +47,7 @@ function buildServer(): McpServer {
     'grep',
     {
       title: 'Ripgrep with Section Hints',
-      description: 'ripgrep regex search inside a cloned workspace. Returns matches with section_end_hint that chains directly into read_files as end_line.',
+      description: 'ripgrep regex search inside a cloned workspace. Returns matches with section_end_hint that chains directly into read_files as end_line. By default respects .gitignore AND skips a built-in noise set (node_modules, vendor, dist, build, target, .venv, __pycache__, etc.). Set no_ignore=true for raw rg semantics, or hidden=true to include dot-prefixed files while keeping the defaults.',
       inputSchema: grepSchema,
     },
     makeGrepHandler(cloneManager) as any
@@ -67,7 +67,7 @@ function buildServer(): McpServer {
     'directory_tree',
     {
       title: 'Recursive Directory Tree',
-      description: 'Recursive directory listing of a workspace path. Auto-caps max_depth and skips .git / node_modules / .venv / target / dist.',
+      description: 'Recursive directory listing of a workspace path. Auto-caps max_depth. By default skips a built-in noise set (.git, node_modules, dist, build, target, .venv, vendor, __pycache__, .next, etc.). Set include_ignored=true to walk everything, or pass extra_skip to append more directory names. Skipped names actually encountered are echoed back in the response.',
       inputSchema: directoryTreeSchema,
     },
     makeDirectoryTreeHandler(cloneManager) as any

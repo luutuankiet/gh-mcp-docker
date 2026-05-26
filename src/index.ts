@@ -22,6 +22,7 @@ import { directoryTreeSchema, makeDirectoryTreeHandler } from './tools/directory
 import { jqSchema, makeJqHandler } from './tools/jq.js';
 import { yqSchema, makeYqHandler } from './tools/yq.js';
 import { ghApiSchema, ghApiHandler } from './tools/gh-api.js';
+import { ghSchema, ghHandler } from './tools/gh.js';
 
 config();
 
@@ -30,7 +31,7 @@ const cloneManager = new CloneManager();
 function buildServer(): McpServer {
   const server = new McpServer({
     name: 'gh-cli-mcp',
-    version: '0.2.0',
+    version: '0.3.0',
   });
 
   server.registerTool(
@@ -96,11 +97,21 @@ function buildServer(): McpServer {
   server.registerTool(
     'gh_api',
     {
-      title: 'GitHub API (GET-only)',
-      description: 'Read-only GitHub API passthrough via gh CLI. Accepts a relative API path (e.g. "repos/owner/repo", "search/code?q=foo+repo:bar"). Method overrides and write fields are rejected.',
+      title: 'GitHub REST API',
+      description: 'GitHub REST API passthrough via `gh api <path>`. Accepts a relative API path (e.g. "repos/owner/repo", "search/code?q=foo+repo:bar", "repos/owner/repo/actions/runs?per_page=10"). Optional `jq` filter param projects/aggregates the response before return — recommended on noisy endpoints. For writes (POST/PATCH/DELETE) or multi-flag invocations, use the `gh` tool with args=["api",...].',
       inputSchema: ghApiSchema,
     },
     ghApiHandler as any
+  );
+
+  server.registerTool(
+    'gh',
+    {
+      title: 'gh CLI (any subcommand)',
+      description: 'Faithful `gh <args>` execution. No subcommand allowlist, no flag blocklist. Authority = PAT scope. Use for orchestration: `gh release create`, `gh pr create`, `gh repo create`, `gh workflow run`, `gh issue create`, etc. For raw REST queries with projection, prefer `gh_api` (it has an inline `jq` filter param).',
+      inputSchema: ghSchema,
+    },
+    ghHandler as any
   );
 
   return server;

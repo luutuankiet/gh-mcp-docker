@@ -1,7 +1,17 @@
 # Production deployment: file-based Traefik routing (router/service/middleware
 # live in your Traefik dynamic config). Container only joins the `frontend`
 # external network so Traefik can reach http://gh-cli-mcp:8000 internally.
-# tmpfs /tmp/repos: ephemeral clone workspace, 2G cap, exec/setuid/dev disabled.
+# tmpfs /tmp/repos: ephemeral clone workspace, exec/setuid/dev disabled.
+#
+# SIZING INVARIANT (do not break this):
+#   memory limit >= tmpfs size + node heap headroom + page cache headroom
+# tmpfs pages are charged to this container's memory cgroup as `shmem` and are
+# not reclaimable under pressure the way page cache is, so every byte of cloned
+# repo is a byte of the memory limit. A tmpfs larger than the memory limit is
+# not a safety valve -- it just guarantees the OOM killer arrives before the
+# clone budget is ever enforced. Current numbers: 512M tmpfs + ~64M node heap
+# + ~192M page cache headroom = 768M limit. TMPFS_QUOTA_MB in .env is set below
+# the tmpfs size (448 < 512) so the manager evicts before the mount hits ENOSPC.
 # init: true -> tini PID 1 reaps stray git/rg/gh children on shutdown.
 
 services:
@@ -13,7 +23,7 @@ services:
     env_file:
       - .env
     tmpfs:
-      - /tmp/repos:size=2g,mode=1770,noexec,nosuid,nodev
+      - /tmp/repos:size=512m,mode=1770,noexec,nosuid,nodev
     networks:
       - frontend
     healthcheck:
@@ -25,7 +35,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 768M
         reservations:
           memory: 32M
     # Traefik routing lives in /root/dev/traefik/config/hosts.yaml (file-based,

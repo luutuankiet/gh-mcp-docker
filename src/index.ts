@@ -31,14 +31,14 @@ const cloneManager = new CloneManager();
 function buildServer(): McpServer {
   const server = new McpServer({
     name: 'gh-cli-mcp',
-    version: '0.3.0',
+    version: '0.3.1',
   });
 
   server.registerTool(
     'clone_repo',
     {
       title: 'Clone GitHub Repo',
-      description: 'Clone a GitHub repository into an ephemeral workspace. Returns a workspace_id used by other tools. Workspaces are GC\'d after CLONE_TTL_SEC of idleness.',
+      description: 'Clone a GitHub repository into an ephemeral workspace. Returns a workspace_id used by other tools. Workspaces are GC\'d after CLONE_TTL_SEC of idleness, and are evicted least-recently-used-first when the tmpfs budget is tight. Requesting the same repo+ref+depth again within CLONE_REUSE_WINDOW_SEC returns the existing workspace instead of cloning a second copy, so parallel clients share one checkout.',
       inputSchema: cloneRepoSchema,
     },
     makeCloneRepoHandler(cloneManager) as any
@@ -124,8 +124,12 @@ app.get('/healthz', (_req: Request, res: Response) => {
   res.status(200).send('ok');
 });
 
-app.get('/workspaces', (_req: Request, res: Response) => {
+app.get('/workspaces', async (_req: Request, res: Response) => {
   // Diagnostic endpoint — NOT MCP; useful for ops smoke.
+  // tmpfs_used_mb is measured against the real mount, so it also counts any
+  // orphaned bytes the in-memory map does not know about. A persistent gap
+  // between tmpfs_used_mb and tracked_mb means the reconcile sweep is losing.
+  const budget = await cloneManager.budget();
   res.status(200).json({
     count: cloneManager.list().length,
     workspaces: cloneManager.list().map((w) => ({
@@ -133,10 +137,26 @@ app.get('/workspaces', (_req: Request, res: Response) => {
       repo: w.repo,
       ref: w.ref,
       size_mb: w.sizeMb,
+      reuse_count: w.reuseCount,
       idle_sec: Math.floor((Date.now() - w.lastAccessed) / 1000),
     })),
     ttl_sec: cloneManager.ttlSec,
+    reuse_window_sec: cloneManager.reuseWindowSec,
+    tmpfs_used_mb: budget.tmpfsUsedMb,
+    tmpfs_quota_mb: budget.tmpfsQuotaMb,
+    tracked_mb: budget.trackedMb,
   });
+});
+
+// Ops escape hatch: force an immediate GC pass without waiting for the 5-minute
+// sweeper or restarting the container.
+app.post('/gc', async (_req: Request, res: Response) => {
+  try {
+    const removed = await cloneManager.sweep();
+    res.status(200).json({ removed, budget: await cloneManager.budget() });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 app.post('/mcp', async (req: Request, res: Response) => {
@@ -182,23 +202,34 @@ async function main() {
   await cloneManager.start();
   const httpServer = app.listen(PORT, HOST, () => {
     console.log(`gh-cli-mcp listening on http://${HOST}:${PORT}/mcp (stateless StreamableHTTP)`);
-    console.log(`clone TTL ${cloneManager.ttlSec}s, max repo ${cloneManager.maxSizeMb}MB, tmpfs quota ${cloneManager.tmpfsQuotaMb}MB`);
+    console.log(`clone TTL ${cloneManager.ttlSec}s, max repo ${cloneManager.maxSizeMb}MB, tmpfs quota ${cloneManager.tmpfsQuotaMb}MB, reuse window ${cloneManager.reuseWindowSec}s`);
   });
 
-  function shutdown(signal: string) {
+  // flushAll must be awaited before exit. Firing it and letting httpServer.close
+  // race to process.exit(0) can abandon workspace directories mid-unlink, which
+  // strands tmpfs pages for as long as the mount survives.
+  let shuttingDown = false;
+  async function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`Received ${signal}, shutting down...`);
-    cloneManager.flushAll().catch((err) => console.error('flushAll error:', err));
+    const force = setTimeout(() => {
+      console.error('Shutdown timeout exceeded, force-exiting');
+      process.exit(1);
+    }, 5000);
+    force.unref();
+    try {
+      await cloneManager.flushAll();
+    } catch (err) {
+      console.error('flushAll error:', err);
+    }
     httpServer.close(() => {
       console.log('HTTP server closed, exiting');
       process.exit(0);
     });
-    setTimeout(() => {
-      console.error('Shutdown timeout exceeded, force-exiting');
-      process.exit(1);
-    }, 5000).unref();
   }
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 main().catch((err) => {

@@ -1,6 +1,6 @@
 {
   "name": "gh-cli-mcp-http",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Self-hosted MCP server for live GitHub operations (read + write). Bundles git + gh + ripgrep + jq + yq; serves over HTTP via @modelcontextprotocol/sdk's StreamableHTTPServerTransport. PAT scope is the policy boundary.",
   "type": "module",
   "private": true,

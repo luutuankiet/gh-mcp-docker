@@ -18,7 +18,8 @@ export function makeCloneRepoHandler(manager: CloneManager) {
         sha: ws.sha,
         size_mb: ws.sizeMb,
         ttl_sec: manager.ttlSec,
-        note: `Workspace will be GC'd after ${manager.ttlSec}s of idleness. Pass workspace_id to grep/read_files/directory_tree/jq/yq.`,
+        reused: ws.reuseCount > 0,
+        note: `Workspace will be GC'd after ${manager.ttlSec}s of idleness, or evicted earlier (least-recently-used first) if the tmpfs budget is tight. Pass workspace_id to grep/read_files/directory_tree/jq/yq.`,
       };
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],

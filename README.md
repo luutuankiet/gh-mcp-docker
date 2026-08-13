@@ -10,7 +10,24 @@ v0.3.0 builds on v0.2.0's HTTP MCP foundation (native `@modelcontextprotocol/sdk
 
 ## Resource profile
 
-Single Node process, no spawning beyond `git`/`gh`/`rg`/`jq`/`yq` subprocesses scoped to one request. Resting ~40 MiB. Burst (15 concurrent clones, 500 MiB cap each) bounded by the 2 GiB tmpfs and 256 MiB container limit. Workspaces GC after `CLONE_TTL_SEC` (default 30 min) of idleness; sweeper runs every 5 min.
+Single Node process, no spawning beyond `git`/`gh`/`rg`/`jq`/`yq` subprocesses scoped to one request. Resting ~40 MiB.
+
+**Cloned bytes are memory, not disk.** `/tmp/repos` is a tmpfs, so its pages are charged to the container's memory cgroup as `shmem`, and unlike page cache they are not reclaimable under pressure. The clone budget must therefore stay *under* the container memory limit, never above it. The shipped numbers:
+
+| Knob | Value | Relationship |
+| --- | --- | --- |
+| compose `memory` limit | 768 MiB | must be >= tmpfs + heap + page cache headroom |
+| compose `tmpfs` size | 512 MiB | hard ceiling; hitting it returns ENOSPC |
+| `TMPFS_QUOTA_MB` | 448 | soft ceiling; manager evicts before ENOSPC |
+| `CLONE_MAX_SIZE_MB` | 350 | one repo can never swallow the whole budget |
+
+Reclamation runs on three independent paths, so no single failure pins memory:
+
+1. **TTL eviction** — workspaces idle beyond `CLONE_TTL_SEC` (default 30 min) are removed; sweeper runs every 5 min. Every tool call touches `lastAccessed`, so the clock only runs while a workspace is genuinely unused.
+2. **Orphan reconcile** — the same sweep deletes any UUID-shaped directory in the mount that no live workspace claims. This is what makes GC self-healing: a directory that falls out of the in-memory map (crash, failed unlink, leftovers from a previous process) would otherwise pin tmpfs pages with nothing left to evict it. Non-UUID paths are never touched.
+3. **LRU eviction under pressure** — admission is measured with `statfs` against the real mount, not by summing remembered sizes. A clone that would breach `TMPFS_QUOTA_MB` evicts least-recently-used workspaces to make room rather than failing the caller. Only a repo that cannot fit in an empty tmpfs is rejected.
+
+**Clone dedup**: requesting the same `repo` + `ref` + `depth` within `CLONE_REUSE_WINDOW_SEC` returns the existing `workspace_id` (`reused: true`) instead of cloning a second copy. Every workspace-consuming tool is read-only, so sharing is safe. This matters when several agents research the same repository concurrently — without it, N clients materialise N identical checkouts.
 
 ## Quick start
 
@@ -62,8 +79,9 @@ Both `directory_tree` and `grep` skip the typical noisy dirs (`node_modules`, `.
 | `PORT` | 8000 | HTTP bind port |
 | `HOST` | 0.0.0.0 | HTTP bind host |
 | `CLONE_TTL_SEC` | 1800 | Idle TTL before workspace GC |
-| `CLONE_MAX_SIZE_MB` | 500 | Reject clones over this size (sniffed via `gh api`) |
-| `TMPFS_QUOTA_MB` | 2048 | Match the compose tmpfs size; refuse new clones over budget |
+| `CLONE_MAX_SIZE_MB` | 350 | Reject clones over this size (sniffed via `gh api`) |
+| `TMPFS_QUOTA_MB` | 448 | Soft budget, kept below the compose tmpfs size; LRU-evict over budget |
+| `CLONE_REUSE_WINDOW_SEC` | 300 | Reuse an existing checkout for an identical repo+ref+depth request; 0 disables |
 
 ## Token / PAT
 
@@ -101,7 +119,8 @@ Then wire your router + service + a `basicAuth` middleware in your Traefik dynam
 - **Stateless MCP**: `sessionIdGenerator: undefined`. Each `/mcp` POST gets its own `McpServer` + `StreamableHTTPServerTransport` pair, both closed on `res.on('close')`. No shared server (would leak JSON-RPC IDs across concurrent clients).
 - **Module-level CloneManager**: workspace map + GC interval live across requests; init heap paid once at boot.
 - **tmpfs `/tmp/repos`**: noexec/nosuid/nodev. Workspaces live and die here; container restart = clean slate.
-- **No persistent cache**: clone-per-session is intentionally simpler than LRU hand-rolling. GC sweeper is the only state we maintain.
+- **No persistent cache**: clones stay ephemeral. The manager keeps only a short reuse window plus LRU eviction under budget pressure — enough to stop duplicate concurrent clones without becoming a cache with invalidation semantics to get wrong.
+- **Ops endpoints**: `GET /workspaces` reports live workspaces plus `tmpfs_used_mb` / `tracked_mb`. A persistent gap between those two means the reconcile sweep is losing. `POST /gc` forces an immediate sweep without waiting 5 minutes or restarting.
 - **`init: true`** in compose → tini PID 1 reaps stray `git`/`rg`/`gh` children on shutdown.
 
 ## Status
